@@ -23,15 +23,15 @@ import pygame
 
 # ============================ CONFIG ============================
 CAMERA_INDEX = 0
-EYE_W, EYE_H = 1280, 720      # resolution of ONE projector
-WINDOW_POS = (1920, 0)        # top-left corner of projector 1 on your extended desktop
+EYE_W, EYE_H = 1080, 1920      # resolution of ONE projector
+WINDOW_POS = (3440, 0)        # top-left corner of projector 1 on your extended desktop
 SWAP_EYES = False             # True if the eyes land in the wrong windows
 MIRROR_OUTPUT = False          # True for rear projection (image is viewed from the back)
 INVERT_TRACKING = True        # flip to False if the eyes look away from people
 DETECT_WIDTH = 480            # frames are shrunk to this width before detection
 DETECT_EVERY = 2              # run detection on every Nth frame
 IDLE_AFTER = 2.0              # seconds without a person before the eyes wander
-EYE_SIZE = 520                # width of each eye in pixels (height is ~0.75x)
+EYE_SIZE = 800                # width of each eye in pixels (height is ~0.75x)
 CALM_COLOR = (255, 196, 40)   # idle color
 ANGRY_COLOR = (255, 60, 15)   # color when someone is being watched
 RIM_COLOR = (110, 55, 10)     # dark outline around each eye
@@ -81,6 +81,22 @@ def tracker_loop(shared):
             cv2.waitKey(1)
     cap.release()
 
+def tracker_mouse(shared):
+    pygame.init()
+    screen = pygame.display.set_mode((EYE_W, EYE_H))
+    while shared.running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                with shared.lock:
+                    shared.running = False
+        mx, my = pygame.mouse.get_pos()
+        x = (mx / EYE_W) * 2 - 1
+        y = (my / EYE_H) * 2 - 1
+        with shared.lock:
+            shared.x, shared.y, shared.seen = x, y, time.time()
+        time.sleep(0.01)
+    pygame.quit()
+
 def bezier(p0, p1, p2, p3, n=40):
     pts = []
     for i in range(n + 1):
@@ -105,7 +121,7 @@ class EyeAssets:
     def __init__(self, inner_right):
         self.inner_right = inner_right
         self.w = EYE_SIZE
-        self.h = int(EYE_SIZE * 0.79)
+        self.h = int(EYE_SIZE * 1.5)
         w, h = self.w, self.h
         self.size = (w + 2 * PAD, h + 2 * PAD)
 
@@ -174,7 +190,7 @@ def main():
 
     shared = Shared()
     if not args.test:
-        threading.Thread(target=tracker_mouse, args=(shared,), daemon=True).start()
+        threading.Thread(target=tracker_loop, args=(shared,), daemon=True).start()
         os.environ["SDL_VIDEO_WINDOW_POS"] = "%d,%d" % WINDOW_POS
 
     pygame.init()
