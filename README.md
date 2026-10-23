@@ -31,10 +31,11 @@ The `.env` file is ignored by Git. Keep camera credentials there and do not
 commit them. A `CAMERA_SOURCE` value set in the process environment takes
 precedence over the value in `.env`.
 
-RTSP connections use a 10-second open/read timeout and automatically retry
-after a failed connection or stalled stream. A timeout warning means OpenCV
-did not receive frames before that limit; repeated warnings can indicate an
-unreachable camera, incorrect stream URL, or network instability.
+RTSP connections use UDP transport, a 10-second open/read timeout, and
+automatically retry after a failed connection or stalled stream. A timeout
+warning means OpenCV did not receive frames before that limit; repeated
+warnings can indicate an unreachable camera, incorrect stream URL, or network
+instability.
 
 ## Run
 

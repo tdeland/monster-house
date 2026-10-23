@@ -92,7 +92,16 @@ def open_camera(source):
             cv2.CAP_PROP_READ_TIMEOUT_MSEC,
             RTSP_READ_TIMEOUT_MS,
         ]
-        return cv2.VideoCapture(source, cv2.CAP_FFMPEG, timeout_params)
+        options_env = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+        previous_options = os.environ.get(options_env)
+        os.environ[options_env] = "rtsp_transport;udp"
+        try:
+            return cv2.VideoCapture(source, cv2.CAP_FFMPEG, timeout_params)
+        finally:
+            if previous_options is None:
+                os.environ.pop(options_env, None)
+            else:
+                os.environ[options_env] = previous_options
     return cv2.VideoCapture(source)
 
 
