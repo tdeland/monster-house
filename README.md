@@ -72,7 +72,8 @@ side. The application window spans both projectors, with one eye on each.
 Display and tracking options, including eye size, projector position, mirroring,
 and detection settings, are defined in the `CONFIG` section near the top of
 `main.py`. Person detection is tuned for upright pedestrians farther from the
-camera: it uses a 640-pixel detection frame, a 512-pixel YOLO input, a 0.25
+camera: it uses a 1920-pixel detection frame, a 512-pixel YOLO input, a 0.25
 confidence threshold, and ignores detections wider than they are tall. The
 aspect-ratio filter favors standing pedestrians and may exclude people who are
-lying down or crouched.
+lying down or crouched. Tracking only accepts detections whose center lies in
+the horizontal band covering the middle third of the frame's height.

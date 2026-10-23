@@ -33,6 +33,8 @@ YOLO_WEIGHTS = os.path.join(os.path.dirname(__file__), "models", "yolov4-tiny.we
 PERSON_CLASS_ID = 0           # COCO class index for person
 PERSON_CONFIDENCE = 0.25
 MIN_PERSON_ASPECT_RATIO = 1.2  # favor upright pedestrians over wide false detections
+TRACKING_VERTICAL_START = 1 / 3
+TRACKING_VERTICAL_END = 2 / 3
 IDLE_AFTER = 2.0              # seconds without a person before the eyes wander
 EYE_SIZE = 800                # width of each eye in pixels (height is ~0.75x)
 CALM_COLOR = (255, 196, 40)   # idle color
@@ -76,12 +78,16 @@ def detect_person_boxes(net, image):
     )
     if class_ids is None or boxes is None:
         return []
+    frame_height = image.shape[0]
     return [
         tuple(int(value) for value in box)
         for class_id, box in zip(class_ids.flatten(), boxes)
         if int(class_id) == PERSON_CLASS_ID
         and box[2] > 0
         and box[3] / box[2] >= MIN_PERSON_ASPECT_RATIO
+        and frame_height * TRACKING_VERTICAL_START
+        <= box[1] + box[3] / 2
+        <= frame_height * TRACKING_VERTICAL_END
     ]
 
 
@@ -144,6 +150,10 @@ def tracker_loop(shared):
                     if SHOW_PREVIEW:
                         cv2.rectangle(small, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
                 if SHOW_PREVIEW:
+                    top = int(sh * TRACKING_VERTICAL_START)
+                    bottom = int(sh * TRACKING_VERTICAL_END)
+                    cv2.line(small, (0, top), (sw, top), (255, 255, 0), 2)
+                    cv2.line(small, (0, bottom), (sw, bottom), (255, 255, 0), 2)
                     cv2.imshow("preview", small)
                     cv2.waitKey(1)
         finally:
