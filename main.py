@@ -2,14 +2,6 @@
 """
 Monster eyes: a webcam watches the sidewalk, and two angry cat eyes follow people.
 When someone is being tracked the eyes flush from yellow to red and the pupils narrow.
-
-Install:   pip install opencv-python pygame
-Test:      python monster_eyes.py --test      (windowed; eyes follow your mouse,
-                                               hold the left button to make them angry)
-Run live:  python monster_eyes.py             (borderless window across both projectors)
-
-Setup: set the two projectors up as an extended desktop, side by side. The
-window spans both, left half to one projector and right half to the other.
 """
 import argparse
 import math
@@ -20,22 +12,28 @@ import time
 
 import cv2
 import pygame
+from camera_config import load_camera_source
+
 
 # ============================ CONFIG ============================
-CAMERA_INDEX = 0
+CAMERA_SOURCE = load_camera_source()
 EYE_W, EYE_H = 1080, 1920      # resolution of ONE projector
-WINDOW_POS = (3440, 0)        # top-left corner of projector 1 on your extended desktop
+WINDOW_POS = (0, 0)        # top-left corner of projector 1 on your extended desktop
 SWAP_EYES = False             # True if the eyes land in the wrong windows
 MIRROR_OUTPUT = False          # True for rear projection (image is viewed from the back)
 INVERT_TRACKING = True        # flip to False if the eyes look away from people
 DETECT_WIDTH = 480            # frames are shrunk to this width before detection
 DETECT_EVERY = 2              # run detection on every Nth frame
+YOLO_CONFIG = os.path.join(os.path.dirname(__file__), "models", "yolov4-tiny.cfg")
+YOLO_WEIGHTS = os.path.join(os.path.dirname(__file__), "models", "yolov4-tiny.weights")
+PERSON_CLASS_ID = 0           # COCO class index for person
+PERSON_CONFIDENCE = 0.45
 IDLE_AFTER = 2.0              # seconds without a person before the eyes wander
 EYE_SIZE = 800                # width of each eye in pixels (height is ~0.75x)
 CALM_COLOR = (255, 196, 40)   # idle color
 ANGRY_COLOR = (255, 60, 15)   # color when someone is being watched
 RIM_COLOR = (110, 55, 10)     # dark outline around each eye
-SHOW_PREVIEW = False          # camera preview window (works on Windows/Linux)
+SHOW_PREVIEW = True          # camera preview window (works on Windows/Linux)
 # ================================================================
 
 PAD = 12
@@ -50,10 +48,43 @@ class Shared:
         self.running = True
 
 
+def require_detector_model():
+    missing_files = [
+        path for path in (YOLO_CONFIG, YOLO_WEIGHTS)
+        if not os.path.isfile(path)
+    ]
+    if missing_files:
+        missing_names = ", ".join(os.path.basename(path) for path in missing_files)
+        raise FileNotFoundError(
+            f"Missing YOLOv4-tiny model file(s): {missing_names}. "
+            "Download the files linked in README.md and put them in the models directory."
+        )
+
+
+def detect_person_boxes(net, image):
+    class_ids, _, boxes = net.detect(
+        image,
+        confThreshold=PERSON_CONFIDENCE,
+        nmsThreshold=0.4,
+    )
+    if class_ids is None or boxes is None:
+        return []
+    return [
+        tuple(int(value) for value in box)
+        for class_id, box in zip(class_ids.flatten(), boxes)
+        if int(class_id) == PERSON_CLASS_ID
+    ]
+
+
 def tracker_loop(shared):
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    hog = cv2.HOGDescriptor()
-    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+    net = cv2.dnn_DetectionModel(
+        cv2.dnn.readNetFromDarknet(YOLO_CONFIG, YOLO_WEIGHTS)
+    )
+    net.setInputParams(size=(416, 416), scale=1 / 255.0, swapRB=True)
+    cap = cv2.VideoCapture(CAMERA_SOURCE)
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError("Could not open the configured camera source.")
     n = 0
     while shared.running:
         ok, frame = cap.read()
@@ -66,7 +97,7 @@ def tracker_loop(shared):
         h, w = frame.shape[:2]
         small = cv2.resize(frame, (DETECT_WIDTH, int(h * DETECT_WIDTH / w)))
         sh, sw = small.shape[:2]
-        boxes, _ = hog.detectMultiScale(small, winStride=(8, 8), padding=(8, 8), scale=1.05)
+        boxes = detect_person_boxes(net, small)
         if len(boxes):
             # follow the biggest box (closest person)
             bx, by, bw, bh = max(boxes, key=lambda b: b[2] * b[3])
@@ -162,8 +193,7 @@ def draw_eye(surf, a, look, blink, alert):
     hw = w * 0.105 * (1 - 0.35 * alert)      # pupils narrow when angry
     hh = h * 0.26
     pygame.draw.polygon(box, (0, 0, 0), lens(px, py, hw, hh))
-    off = -hw * 0.25 if a.inner_right else hw * 0.25
-    pygame.draw.polygon(box, (255, 255, 255), lens(px + off, py, hw * 0.22, hh * 0.68))
+    pygame.draw.polygon(box, (255, 255, 255), lens(px, py, hw * 0.22, hh * 0.68))
 
     box.blit(a.mask, (0, 0), special_flags=pygame.BLEND_MULT)   # clip everything to the eye shape
     pygame.draw.polygon(box, RIM_COLOR, a.poly, 7)
@@ -190,6 +220,7 @@ def main():
 
     shared = Shared()
     if not args.test:
+        require_detector_model()
         threading.Thread(target=tracker_loop, args=(shared,), daemon=True).start()
         os.environ["SDL_VIDEO_WINDOW_POS"] = "%d,%d" % WINDOW_POS
 
