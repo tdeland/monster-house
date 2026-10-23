@@ -161,22 +161,6 @@ def tracker_loop(shared):
         if shared.running:
             time.sleep(CAMERA_RECONNECT_DELAY)
 
-def tracker_mouse(shared):
-    pygame.init()
-    screen = pygame.display.set_mode((EYE_W, EYE_H))
-    while shared.running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                with shared.lock:
-                    shared.running = False
-        mx, my = pygame.mouse.get_pos()
-        x = (mx / EYE_W) * 2 - 1
-        y = (my / EYE_H) * 2 - 1
-        with shared.lock:
-            shared.x, shared.y, shared.seen = x, y, time.time()
-        time.sleep(0.01)
-    pygame.quit()
-
 def bezier(p0, p1, p2, p3, n=40):
     pts = []
     for i in range(n + 1):
