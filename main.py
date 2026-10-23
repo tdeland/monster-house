@@ -4,6 +4,7 @@ Monster eyes: a webcam watches the sidewalk, and two angry cat eyes follow peopl
 When someone is being tracked the eyes flush from yellow to red and the pupils narrow.
 """
 import argparse
+import logging
 import math
 import os
 import random
@@ -22,18 +23,23 @@ WINDOW_POS = (0, 0)        # top-left corner of projector 1 on your extended des
 SWAP_EYES = False             # True if the eyes land in the wrong windows
 MIRROR_OUTPUT = False          # True for rear projection (image is viewed from the back)
 INVERT_TRACKING = True        # flip to False if the eyes look away from people
-DETECT_WIDTH = 480            # frames are shrunk to this width before detection
+DETECT_WIDTH = 640            # preserve detail for pedestrians farther from the camera
 DETECT_EVERY = 2              # run detection on every Nth frame
+DETECT_INPUT_SIZE = 512       # YOLO input resolution; multiple of 32
 YOLO_CONFIG = os.path.join(os.path.dirname(__file__), "models", "yolov4-tiny.cfg")
 YOLO_WEIGHTS = os.path.join(os.path.dirname(__file__), "models", "yolov4-tiny.weights")
 PERSON_CLASS_ID = 0           # COCO class index for person
-PERSON_CONFIDENCE = 0.45
+PERSON_CONFIDENCE = 0.25
+MIN_PERSON_ASPECT_RATIO = 1.2  # favor upright pedestrians over wide false detections
 IDLE_AFTER = 2.0              # seconds without a person before the eyes wander
 EYE_SIZE = 800                # width of each eye in pixels (height is ~0.75x)
 CALM_COLOR = (255, 196, 40)   # idle color
 ANGRY_COLOR = (255, 60, 15)   # color when someone is being watched
 RIM_COLOR = (110, 55, 10)     # dark outline around each eye
 SHOW_PREVIEW = True          # camera preview window (works on Windows/Linux)
+RTSP_OPEN_TIMEOUT_MS = 10000
+RTSP_READ_TIMEOUT_MS = 10000
+CAMERA_RECONNECT_DELAY = 2.0
 # ================================================================
 
 PAD = 12
@@ -73,44 +79,75 @@ def detect_person_boxes(net, image):
         tuple(int(value) for value in box)
         for class_id, box in zip(class_ids.flatten(), boxes)
         if int(class_id) == PERSON_CLASS_ID
+        and box[2] > 0
+        and box[3] / box[2] >= MIN_PERSON_ASPECT_RATIO
     ]
+
+
+def open_camera(source):
+    if isinstance(source, str) and source.lower().startswith(("rtsp://", "rtsps://")):
+        timeout_params = [
+            cv2.CAP_PROP_OPEN_TIMEOUT_MSEC,
+            RTSP_OPEN_TIMEOUT_MS,
+            cv2.CAP_PROP_READ_TIMEOUT_MSEC,
+            RTSP_READ_TIMEOUT_MS,
+        ]
+        return cv2.VideoCapture(source, cv2.CAP_FFMPEG, timeout_params)
+    return cv2.VideoCapture(source)
 
 
 def tracker_loop(shared):
     net = cv2.dnn_DetectionModel(
         cv2.dnn.readNetFromDarknet(YOLO_CONFIG, YOLO_WEIGHTS)
     )
-    net.setInputParams(size=(416, 416), scale=1 / 255.0, swapRB=True)
-    cap = cv2.VideoCapture(CAMERA_SOURCE)
-    if not cap.isOpened():
-        cap.release()
-        raise RuntimeError("Could not open the configured camera source.")
+    net.setInputParams(
+        size=(DETECT_INPUT_SIZE, DETECT_INPUT_SIZE),
+        scale=1 / 255.0,
+        swapRB=True,
+    )
     n = 0
     while shared.running:
-        ok, frame = cap.read()
-        if not ok:
-            time.sleep(0.05)
+        cap = open_camera(CAMERA_SOURCE)
+        if not cap.isOpened():
+            cap.release()
+            logging.warning(
+                "Could not open camera source; retrying in %.1f seconds.",
+                CAMERA_RECONNECT_DELAY,
+            )
+            time.sleep(CAMERA_RECONNECT_DELAY)
             continue
-        n += 1
-        if n % DETECT_EVERY:
-            continue
-        h, w = frame.shape[:2]
-        small = cv2.resize(frame, (DETECT_WIDTH, int(h * DETECT_WIDTH / w)))
-        sh, sw = small.shape[:2]
-        boxes = detect_person_boxes(net, small)
-        if len(boxes):
-            # follow the biggest box (closest person)
-            bx, by, bw, bh = max(boxes, key=lambda b: b[2] * b[3])
-            x = (bx + bw / 2) / sw * 2 - 1
-            y = (by + bh * 0.15) / sh * 2 - 1      # aim at head height
-            with shared.lock:
-                shared.x, shared.y, shared.seen = x, y, time.time()
-            if SHOW_PREVIEW:
-                cv2.rectangle(small, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
-        if SHOW_PREVIEW:
-            cv2.imshow("preview", small)
-            cv2.waitKey(1)
-    cap.release()
+        try:
+            while shared.running:
+                ok, frame = cap.read()
+                if not ok:
+                    logging.warning(
+                        "Camera stream stopped responding; reconnecting in %.1f seconds.",
+                        CAMERA_RECONNECT_DELAY,
+                    )
+                    break
+                n += 1
+                if n % DETECT_EVERY:
+                    continue
+                h, w = frame.shape[:2]
+                small = cv2.resize(frame, (DETECT_WIDTH, int(h * DETECT_WIDTH / w)))
+                sh, sw = small.shape[:2]
+                boxes = detect_person_boxes(net, small)
+                if len(boxes):
+                    # follow the biggest box (closest person)
+                    bx, by, bw, bh = max(boxes, key=lambda b: b[2] * b[3])
+                    x = (bx + bw / 2) / sw * 2 - 1
+                    y = (by + bh * 0.15) / sh * 2 - 1      # aim at head height
+                    with shared.lock:
+                        shared.x, shared.y, shared.seen = x, y, time.time()
+                    if SHOW_PREVIEW:
+                        cv2.rectangle(small, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
+                if SHOW_PREVIEW:
+                    cv2.imshow("preview", small)
+                    cv2.waitKey(1)
+        finally:
+            cap.release()
+        if shared.running:
+            time.sleep(CAMERA_RECONNECT_DELAY)
 
 def tracker_mouse(shared):
     pygame.init()
