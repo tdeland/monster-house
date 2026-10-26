@@ -24,10 +24,8 @@ SWAP_EYES = False             # True if the eyes land in the wrong windows
 MIRROR_OUTPUT = False          # True for rear projection (image is viewed from the back)
 INVERT_TRACKING = True        # flip to False if the eyes look away from people
 DETECT_WIDTH = 1920            # preserve detail for pedestrians farther from the camera
-DETECT_EVERY = 2              # run detection on every Nth frame
+DETECT_EVERY = 10              # run detection on every Nth frame
 DETECT_INPUT_SIZE = 512       # YOLO input resolution; multiple of 32
-RTSP_FRAME_WIDTH = 1920
-RTSP_FRAME_HEIGHT = 1080
 YOLO_CONFIG = os.path.join(os.path.dirname(__file__), "models", "yolov4-tiny.cfg")
 YOLO_WEIGHTS = os.path.join(os.path.dirname(__file__), "models", "yolov4-tiny.weights")
 PERSON_CLASS_ID = 0           # COCO class index for person
@@ -93,14 +91,22 @@ def detect_person_boxes(net, image):
 
 def open_camera(source):
     if isinstance(source, str) and source.lower().startswith(("rtsp://", "rtsps://")):
-        from camera_vlc import VlcRtspCapture
-
-        return VlcRtspCapture(
-            source,
-            RTSP_FRAME_WIDTH,
-            RTSP_FRAME_HEIGHT,
+        timeout_params = [
+            cv2.CAP_PROP_OPEN_TIMEOUT_MSEC,
             RTSP_READ_TIMEOUT_MS,
-        )
+            cv2.CAP_PROP_READ_TIMEOUT_MSEC,
+            RTSP_READ_TIMEOUT_MS,
+        ]
+        options_env = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
+        previous_options = os.environ.get(options_env)
+        os.environ[options_env] = "rtsp_transport;tcp"
+        try:
+            return cv2.VideoCapture(source, cv2.CAP_FFMPEG, timeout_params)
+        finally:
+            if previous_options is None:
+                os.environ.pop(options_env, None)
+            else:
+                os.environ[options_env] = previous_options
     return cv2.VideoCapture(source)
 
 

@@ -9,7 +9,6 @@ when the camera has not seen anyone recently.
 - Python 3
 - OpenCV 4 (`opencv-python<5`; OpenCV 5 removed Darknet model support)
 - Pygame
-- VLC media player (required for RTSP camera streams)
 - YOLOv4-tiny model files for person detection
 
 Install the Python packages:
@@ -32,11 +31,11 @@ The `.env` file is ignored by Git. Keep camera credentials there and do not
 commit them. A `CAMERA_SOURCE` value set in the process environment takes
 precedence over the value in `.env`.
 
-RTSP streams are decoded through the installed VLC media player and passed to
-OpenCV for person detection. VLC uses UDP by default. The app retries after a
-10-second read timeout or stalled stream. Webcam indexes continue to use
-OpenCV's camera capture. RTSP frames are captured and processed at the stream's
-full 1920×1080 resolution before YOLO inference.
+RTSP streams are decoded by OpenCV's FFmpeg backend over TCP, with a 10-second
+open/read timeout. The app retries after a failed connection or stalled stream.
+The installed OpenCV package must include FFmpeg support. Webcam indexes
+continue to use OpenCV's camera capture. RTSP frames are processed at the
+camera stream's configured resolution before YOLO inference.
 
 ## Run
 
