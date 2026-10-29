@@ -31,7 +31,7 @@ The `.env` file is ignored by Git. Keep camera credentials there and do not
 commit them. A `CAMERA_SOURCE` value set in the process environment takes
 precedence over the value in `.env`.
 
-RTSP streams are decoded by OpenCV's FFmpeg backend over TCP, with a 10-second
+RTSP streams are decoded by OpenCV's FFmpeg backend over UDP, with a 10-second
 open/read timeout. The app retries after a failed connection or stalled stream.
 The installed OpenCV package must include FFmpeg support. Webcam indexes
 continue to use OpenCV's camera capture. RTSP frames are processed at the

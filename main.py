@@ -13,11 +13,13 @@ import time
 
 import cv2
 import pygame
-from camera_config import load_camera_source
+from dotenv import load_dotenv
 
+from camera_stream import LatestFrameReader
+from person_detector import PersonDetector
+from tracking import TargetFilter
 
 # ============================ CONFIG ============================
-CAMERA_SOURCE = load_camera_source()
 EYE_W, EYE_H = 1080, 1920      # resolution of ONE projector
 WINDOW_POS = (0, 0)        # top-left corner of projector 1 on your extended desktop
 SWAP_EYES = False             # True if the eyes land in the wrong windows
@@ -39,12 +41,11 @@ CALM_COLOR = (255, 196, 40)   # idle color
 ANGRY_COLOR = (255, 60, 15)   # color when someone is being watched
 RIM_COLOR = (110, 55, 10)     # dark outline around each eye
 SHOW_PREVIEW = True          # camera preview window (works on Windows/Linux)
-RTSP_READ_TIMEOUT_MS = 10000
+RTSP_READ_TIMEOUT_MS = 20000
 CAMERA_RECONNECT_DELAY = 2.0
-# ================================================================
-
 PAD = 12
-
+OPENCV_FFMPEG_CAPTURE_OPTIONS = "rtsp_transport;tcp|allowed_media_types;video"
+# ================================================================
 
 class Shared:
     def __init__(self):
@@ -52,120 +53,37 @@ class Shared:
         self.x = 0.0          # -1 (camera left) .. 1 (camera right)
         self.y = 0.0          # -1 (top) .. 1 (bottom)
         self.seen = 0.0       # timestamp of last detection
+        self.filter = TargetFilter()
         self.running = True
 
-
-def require_detector_model():
-    missing_files = [
-        path for path in (YOLO_CONFIG, YOLO_WEIGHTS)
-        if not os.path.isfile(path)
-    ]
-    if missing_files:
-        missing_names = ", ".join(os.path.basename(path) for path in missing_files)
-        raise FileNotFoundError(
-            f"Missing YOLOv4-tiny model file(s): {missing_names}. "
-            "Download the files linked in README.md and put them in the models directory."
-        )
-
-
-def detect_person_boxes(net, image):
-    class_ids, _, boxes = net.detect(
-        image,
-        confThreshold=PERSON_CONFIDENCE,
-        nmsThreshold=0.4,
-    )
-    if class_ids is None or boxes is None:
-        return []
-    frame_height = image.shape[0]
-    return [
-        tuple(int(value) for value in box)
-        for class_id, box in zip(class_ids.flatten(), boxes)
-        if int(class_id) == PERSON_CLASS_ID
-        and box[2] > 0
-        and box[3] / box[2] >= MIN_PERSON_ASPECT_RATIO
-        and frame_height * TRACKING_VERTICAL_START
-        <= box[1] + box[3] / 2
-        <= frame_height * TRACKING_VERTICAL_END
-    ]
-
-
-def open_camera(source):
-    if isinstance(source, str) and source.lower().startswith(("rtsp://", "rtsps://")):
-        timeout_params = [
-            cv2.CAP_PROP_OPEN_TIMEOUT_MSEC,
-            RTSP_READ_TIMEOUT_MS,
-            cv2.CAP_PROP_READ_TIMEOUT_MSEC,
-            RTSP_READ_TIMEOUT_MS,
-        ]
-        options_env = "OPENCV_FFMPEG_CAPTURE_OPTIONS"
-        previous_options = os.environ.get(options_env)
-        os.environ[options_env] = "rtsp_transport;tcp"
-        try:
-            return cv2.VideoCapture(source, cv2.CAP_FFMPEG, timeout_params)
-        finally:
-            if previous_options is None:
-                os.environ.pop(options_env, None)
-            else:
-                os.environ[options_env] = previous_options
-    return cv2.VideoCapture(source)
-
-
-def tracker_loop(shared):
-    net = cv2.dnn_DetectionModel(
-        cv2.dnn.readNetFromDarknet(YOLO_CONFIG, YOLO_WEIGHTS)
-    )
-    net.setInputParams(
-        size=(DETECT_INPUT_SIZE, DETECT_INPUT_SIZE),
-        scale=1 / 255.0,
-        swapRB=True,
-    )
-    n = 0
+def tracker_loop(shared, detector, camera_source):
+    if not isinstance(camera_source, int):
+        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", OPENCV_FFMPEG_CAPTURE_OPTIONS)
+    reader = LatestFrameReader(camera_source)
+    logging.info("Camera stream opened: %s", reader.opened)
     while shared.running:
-        cap = open_camera(CAMERA_SOURCE)
-        if not cap.isOpened():
-            cap.release()
-            logging.warning(
-                "Could not open camera source; retrying in %.1f seconds.",
-                CAMERA_RECONNECT_DELAY,
-            )
-            time.sleep(CAMERA_RECONNECT_DELAY)
+        frame = reader.read()
+        if frame is None:
             continue
-        try:
-            while shared.running:
-                ok, frame = cap.read()
-                if not ok:
-                    logging.warning(
-                        "Camera stream stopped responding; reconnecting in %.1f seconds.",
-                        CAMERA_RECONNECT_DELAY,
-                    )
-                    break
-                n += 1
-                if n % DETECT_EVERY:
-                    continue
-                h, w = frame.shape[:2]
-                small = cv2.resize(frame, (DETECT_WIDTH, int(h * DETECT_WIDTH / w)))
-                sh, sw = small.shape[:2]
-                boxes = detect_person_boxes(net, small)
-                if len(boxes):
-                    # follow the biggest box (closest person)
-                    bx, by, bw, bh = max(boxes, key=lambda b: b[2] * b[3])
-                    x = (bx + bw / 2) / sw * 2 - 1
-                    y = (by + bh * 0.15) / sh * 2 - 1      # aim at head height
-                    with shared.lock:
-                        shared.x, shared.y, shared.seen = x, y, time.time()
-                    if SHOW_PREVIEW:
-                        cv2.rectangle(small, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
-                if SHOW_PREVIEW:
-                    top = int(sh * TRACKING_VERTICAL_START)
-                    bottom = int(sh * TRACKING_VERTICAL_END)
-                    cv2.line(small, (0, top), (sw, top), (255, 255, 0), 2)
-                    cv2.line(small, (0, bottom), (sw, bottom), (255, 255, 0), 2)
-                    cv2.imshow("preview", small)
-                    cv2.waitKey(1)
-        finally:
-            cap.release()
-        if shared.running:
-            time.sleep(CAMERA_RECONNECT_DELAY)
+        h,w = frame.shape[:2]
+        small = cv2.resize(frame, (DETECT_WIDTH, int(h * DETECT_WIDTH / w)))
+        sh, sw = small.shape[:2]
+        boxes = detector.detect(small)
+        if len(boxes):
+            # follow the biggest box (closest person)
+            bx, by, bw, bh = max(boxes, key=lambda b: b[2] * b[3])
+            x = (bx + bw / 2) / sw * 2 - 1
+            y = (by + bh * 0.15) / sh * 2 - 1      # aim at head height
+            with shared.lock:
+                now = time.time()
+                shared.filter.update(x, y, now)
+                shared.seen = now
+            if SHOW_PREVIEW:
+                cv2.rectangle(small, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
+        if SHOW_PREVIEW:
+            cv2.imshow("preview", small)
+            cv2.waitKey(1)
+    reader.release()
 
 def bezier(p0, p1, p2, p3, n=40):
     pts = []
@@ -176,7 +94,6 @@ def bezier(p0, p1, p2, p3, n=40):
         y = m**3 * p0[1] + 3 * m * m * t * p1[1] + 3 * m * t * t * p2[1] + t**3 * p3[1]
         pts.append((x, y))
     return pts
-
 
 def lens(cx, cy, hw, hh, n=20):
     """Leaf shape: pointed top and bottom, widest in the middle (a slit pupil)."""
@@ -259,8 +176,11 @@ def main():
 
     shared = Shared()
     if not args.test:
-        require_detector_model()
-        threading.Thread(target=tracker_loop, args=(shared,), daemon=True).start()
+        camera_source = args.camera if args.camera is not None else os.environ.get("CAMERA_SOURCE")
+        detector = PersonDetector()
+        threading.Thread(
+            target=tracker_loop, args=(shared, detector, camera_source), daemon=True
+        ).start()
         os.environ["SDL_VIDEO_WINDOW_POS"] = "%d,%d" % WINDOW_POS
 
     pygame.init()
