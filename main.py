@@ -15,7 +15,6 @@ import pygame
 
 from camera_config import load_camera_source
 from camera_stream import LatestFrameReader
-from person_detector import PersonDetector
 from tracking import TargetFilter
 
 # ============================ CONFIG ============================
@@ -176,6 +175,8 @@ def main():
             camera_source = int(args.camera) if args.camera.isdecimal() else args.camera
         else:
             camera_source = load_camera_source()
+        from person_detector import PersonDetector
+
         detector = PersonDetector()
         threading.Thread(
             target=tracker_loop, args=(shared, detector, camera_source), daemon=True

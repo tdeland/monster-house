@@ -50,6 +50,19 @@ Run with the configured camera in a borderless window:
 python main.py
 ```
 
+Check the camera feed without loading the YOLO/PyTorch detector:
+
+```powershell
+python camera_test.py
+```
+
+Add `--detect` to this command to draw person detections; that option requires
+PyTorch to load successfully:
+
+```powershell
+python camera_test.py --detect
+```
+
 You can override `CAMERA_SOURCE` for one run with `--camera`, using a webcam
 index or RTSP URL:
 
