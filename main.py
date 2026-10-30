@@ -4,7 +4,6 @@ Monster eyes: a webcam watches the sidewalk, and two angry cat eyes follow peopl
 When someone is being tracked the eyes flush from yellow to red and the pupils narrow.
 """
 import argparse
-import logging
 import math
 import os
 import random
@@ -13,38 +12,33 @@ import time
 
 import cv2
 import pygame
-from dotenv import load_dotenv
 
+from camera_config import load_camera_source
 from camera_stream import LatestFrameReader
 from person_detector import PersonDetector
 from tracking import TargetFilter
 
 # ============================ CONFIG ============================
-EYE_W, EYE_H = 1080, 1920      # resolution of ONE projector
-WINDOW_POS = (0, 0)        # top-left corner of projector 1 on your extended desktop
-SWAP_EYES = False             # True if the eyes land in the wrong windows
-MIRROR_OUTPUT = False          # True for rear projection (image is viewed from the back)
-INVERT_TRACKING = True        # flip to False if the eyes look away from people
-DETECT_WIDTH = 1920            # preserve detail for pedestrians farther from the camera
-DETECT_EVERY = 10              # run detection on every Nth frame
-DETECT_INPUT_SIZE = 512       # YOLO input resolution; multiple of 32
-YOLO_CONFIG = os.path.join(os.path.dirname(__file__), "models", "yolov4-tiny.cfg")
-YOLO_WEIGHTS = os.path.join(os.path.dirname(__file__), "models", "yolov4-tiny.weights")
-PERSON_CLASS_ID = 0           # COCO class index for person
-PERSON_CONFIDENCE = 0.25
-MIN_PERSON_ASPECT_RATIO = 1.2  # favor upright pedestrians over wide false detections
+# Display
+EYE_W, EYE_H = 1080, 1920
+WINDOW_POS = (0, 0)
+SWAP_EYES = False
+MIRROR_OUTPUT = False
+
+# Eye appearance
+EYE_SIZE = 800
+CALM_COLOR = (255, 196, 40)
+ANGRY_COLOR = (255, 60, 15)
+RIM_COLOR = (110, 55, 10)
+PAD = 12
+
+# Tracking and preview
+INVERT_TRACKING = True
+DETECT_WIDTH = 1920
 TRACKING_VERTICAL_START = 1 / 3
 TRACKING_VERTICAL_END = 2 / 3
-IDLE_AFTER = 2.0              # seconds without a person before the eyes wander
-EYE_SIZE = 800                # width of each eye in pixels (height is ~0.75x)
-CALM_COLOR = (255, 196, 40)   # idle color
-ANGRY_COLOR = (255, 60, 15)   # color when someone is being watched
-RIM_COLOR = (110, 55, 10)     # dark outline around each eye
-SHOW_PREVIEW = True          # camera preview window (works on Windows/Linux)
-RTSP_READ_TIMEOUT_MS = 20000
-CAMERA_RECONNECT_DELAY = 2.0
-PAD = 12
-OPENCV_FFMPEG_CAPTURE_OPTIONS = "rtsp_transport;tcp|allowed_media_types;video"
+IDLE_AFTER = 2.0
+SHOW_PREVIEW = True
 # ================================================================
 
 class Shared:
@@ -57,10 +51,7 @@ class Shared:
         self.running = True
 
 def tracker_loop(shared, detector, camera_source):
-    if not isinstance(camera_source, int):
-        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", OPENCV_FFMPEG_CAPTURE_OPTIONS)
     reader = LatestFrameReader(camera_source)
-    logging.info("Camera stream opened: %s", reader.opened)
     while shared.running:
         frame = reader.read()
         if frame is None:
@@ -77,10 +68,14 @@ def tracker_loop(shared, detector, camera_source):
             with shared.lock:
                 now = time.time()
                 shared.filter.update(x, y, now)
+                shared.x, shared.y = shared.filter.position(now)
                 shared.seen = now
             if SHOW_PREVIEW:
                 cv2.rectangle(small, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
         if SHOW_PREVIEW:
+            for boundary in (TRACKING_VERTICAL_START, TRACKING_VERTICAL_END):
+                line_y = int(sh * boundary)
+                cv2.line(small, (0, line_y), (sw - 1, line_y), (255, 255, 0), 2)
             cv2.imshow("preview", small)
             cv2.waitKey(1)
     reader.release()
@@ -172,11 +167,15 @@ def draw_eye(surf, a, look, blink, alert):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--test", action="store_true", help="windowed test mode, mouse controls the eyes")
+    ap.add_argument("--camera", help="camera index or RTSP URL (overrides CAMERA_SOURCE)")
     args = ap.parse_args()
 
     shared = Shared()
     if not args.test:
-        camera_source = args.camera if args.camera is not None else os.environ.get("CAMERA_SOURCE")
+        if args.camera is not None:
+            camera_source = int(args.camera) if args.camera.isdecimal() else args.camera
+        else:
+            camera_source = load_camera_source()
         detector = PersonDetector()
         threading.Thread(
             target=tracker_loop, args=(shared, detector, camera_source), daemon=True

@@ -8,11 +8,17 @@ os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "8"
 
 import cv2
 
+
+FFMPEG_CAPTURE_OPTIONS = "rtsp_transport;tcp|allowed_media_types;video"
+
+
 class LatestFrameReader:
     """Reads the stream continuously so slow consumers always get the newest frame."""
 
     def __init__(self, url):
         backend = cv2.CAP_ANY if isinstance(url, int) else cv2.CAP_FFMPEG
+        if not isinstance(url, int):
+            os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", FFMPEG_CAPTURE_OPTIONS)
         self.cap = cv2.VideoCapture(url, backend)
         self.opened = self.cap.isOpened()
         self._cond = threading.Condition()

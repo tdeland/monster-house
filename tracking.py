@@ -26,7 +26,7 @@ class TargetFilter:
         self.x = F @ self.x
         self.P = F @ self.P @ F.T + Q
 
-    def _update(self, zx, zy, t):
+    def update(self, zx, zy, t):
         # A long gap likely means a different person, so start fresh.
         if self.x is None or t - self.t > self.reset_after:
             self.x = np.array([zx, zy, 0.0, 0.0])
